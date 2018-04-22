@@ -10,12 +10,11 @@ from pololu_ros.msg import LimitSwitch
 
 # TODO: if necessary, add more try and excepts for error catching
 
-
 class Node(object):
     def __init__(self):
         """Init ros node"""
         self.lock = threading.Lock()
-        rospy.init_node("pololu_node") #TODO: remove 2nd param when done debugging
+        rospy.init_node("pololu_node") 
         rospy.on_shutdown(self.shutdown)
         rospy.loginfo("Connecting to pololu daisy chain")
         self.last_set_speed_time = rospy.get_rostime()
@@ -28,29 +27,17 @@ class Node(object):
         rospy.loginfo("Daisy node timeout = %s", self.timeout)
 
         # get device numbers from ros parameter server (see launch~_node.launch)
-        self.arm_left_devnum = rospy.get_param("~linear_actuators/arm_left")
-        self.arm_right_devnum = rospy.get_param("~linear_actuators/arm_right")
-        self.bucket_left_devnum = rospy.get_param("~linear_actuators/bucket_left")
-        self.bucket_right_devnum = rospy.get_param("~linear_actuators/bucket_right")
-        self.sled_left_devnum = rospy.get_param("~sled/left")
-        self.sled_right_devnum = rospy.get_param("~sled/right")
+        self.dumper_devnum = rospy.get_param("~linear_actuators/dumper")
 
         # initalize Daisy chain serial controllers
-        self.arm_left = Daisy(self.arm_left_devnum, port=self.port, flip=True) # first one initialized must set the port
-        self.arm_right = Daisy(self.arm_right_devnum, flip=True)
-        self.bucket_left = Daisy(self.bucket_left_devnum, flip=True)
-        self.bucket_right = Daisy(self.bucket_right_devnum, flip=True)
-        self.sled_left = Daisy(self.sled_left_devnum, flip=True)
-        self.sled_right = Daisy(self.sled_right_devnum, flip=True)
-        self.devices = [self.arm_left, self.arm_right, self.bucket_left, self.bucket_right, self.sled_left, self.sled_right]
-        self.dev_names = ["arm_left", "arm_right", "bucket_left", "bucket_right", "sled_left", "sled_right"]
+        self.dumper = Daisy(self.dumper_devnum, port=self.port) # first one initialized must set the port
+        self.devices = [dumper]
+        self.dev_names = ["dumper"]
 
         rospy.sleep(0.1) # wait for params to get set
 
         # Subscribers
-        self.arm_sub = rospy.Subscriber("/arm/vel", Float32, self.arm_vel_callback, queue_size=1)
-        self.bucket_sub = rospy.Subscriber("/bucket/vel", Float32, self.bucket_vel_callback, queue_size=1)
-        self.sled_sub = rospy.Subscriber("/sled/vel", Float32, self.sled_vel_callback, queue_size=1)
+        self.dumper_sub = rospy.Subscriber("/arm/vel", Float32, self.arm_vel_callback, queue_size=1)
         self.diagnostic_pub = rospy.Publisher("/diagnostics", DiagnosticArray, queue_size=10)
         self.limit_pub = rospy.Publisher("/pololu/limit_switch", LimitSwitch, queue_size=1)
         rospy.Timer(rospy.Duration(2), self.publish_diagnostics)
@@ -61,14 +48,7 @@ class Node(object):
     def _stop_all_motors(self):
         """Send stop command to all daisy chained motors"""
         with self.lock:
-          self.arm_left.stop()
-          self.arm_right.stop()
-          self.bucket_left.stop()
-          self.bucket_right.stop()
-          self.sled_left.stop()
-          self.sled_right.stop()
-          #for dev in self.devices:
-          #    dev.stop()
+          self.dumper.stop()
 
     def run(self):
         """Run the main ros loop"""
