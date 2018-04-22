@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Set the device port -->
+    <arg name="port" default="/dev/pololu" />
+    <!-- Start node to control motors -->
+    <node pkg="pololu_ros" type="daisy_node.py" name="daisy_node" respawn="true"  output="screen">
+        <!-- Port file of usb serial device -->
+        <param name="port" type="string" value="$(arg port)"/>
+        <!-- Device number configuration for daisy chaining  -->
+        <rosparam>
+            # These are the device numbers of the board for the linear actuators and
+            # rack and pinion (sled) motors. (This is yaml)
+              linear_actuators:
+                  arm_left: 0
+                  arm_right: 1
+                  bucket_left: 2
+                  bucket_right: 3
+              sled:
+                  left: 4
+                  right: 5
+        </rosparam>
+    </node>
+
+</launch>
