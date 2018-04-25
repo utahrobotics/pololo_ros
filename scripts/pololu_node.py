@@ -37,11 +37,9 @@ class Node(object):
         rospy.sleep(0.1) # wait for params to get set
 
         # Subscribers
-        self.dumper_sub = rospy.Subscriber("/arm/vel", Float32, self.arm_vel_callback, queue_size=1)
-        self.diagnostic_pub = rospy.Publisher("/diagnostics", DiagnosticArray, queue_size=10)
-        self.limit_pub = rospy.Publisher("/pololu/limit_switch", LimitSwitch, queue_size=1)
-        rospy.Timer(rospy.Duration(2), self.publish_diagnostics)
-        rospy.Timer(rospy.Duration(0.1), self.publish_limits)
+        self.dumper_sub = rospy.Subscriber("/digger/vel", Float32, self.arm_vel_callback, queue_size=1)
+        #self.diagnostic_pub = rospy.Publisher("/diagnostics", DiagnosticArray, queue_size=10)
+        #rospy.Timer(rospy.Duration(0.1), self.publish_limits)
 
         self._has_showed_message = False  # flag to indicate we have showed the motor shutdown message
 
