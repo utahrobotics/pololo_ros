@@ -104,7 +104,7 @@ class Daisy(object):
         if Daisy.ser is None or not Daisy.ser.isOpen():
             Daisy.first_flip = flip
             Daisy.ser = serial.Serial(port, baudrate=115200, timeout=timeout)
-            Daisy.ser.write(BAUD_SYNC)  # sync old devices by writing 0x80
+            Daisy.ser.write(CMD.BAUD_SYNC)  # sync old devices by writing 0x80
         elif port is not None:
             raise Exception("Only the first instantiated Daisy object can set the port")
 
@@ -126,14 +126,14 @@ class Daisy(object):
     # INTERNAL METHODS
     def _send_command(self, command, databyte3, databyte4):
         """Sends a two-byte command using the Pololu protocol."""
-        cmd = PROTOCOL + chr(self.dev_num) + command + chr(databyte3) + chr(databyte4)
+        cmd = CMD.PROTOCOL + chr(self.dev_num) + command + chr(databyte3) + chr(databyte4)
         #if self.crc_enabled:
         #    cmd = self.crc7(cmd) # Calculate and append Cyclic Redundancy Check byte
         Daisy.ser.write(cmd)
 
     def _send_command_single(self, command):
         """Sends a one-byte command using the Pololu protocol."""
-        cmd = PROTOCOL + chr(self.dev_num) + command
+        cmd = CMD.PROTOCOL + chr(self.dev_num) + command
         #if self.crc_enabled:
         #    cmd = self.crc7(cmd) # Calculate and append Cyclic Redundancy Check byte
         Daisy.ser.write(cmd)
@@ -141,15 +141,15 @@ class Daisy(object):
     def _exit_safe_start(self):
         """Exit safe start so you can freely send commands to Pololu.
         This must be run before run other commands."""
-        self._send_command_single(START)
+        self._send_command_single(CMD.START)
 
     def _stop_motor(self):
         """Immediately stops the motor and enters safe start mode"""
-        self._send_command_single(STOP)
+        self._send_command_single(CMD.STOP)
 
     def _get_variable(self, variable_id):
         """Get variable from pololu device"""
-        cmd = PROTOCOL + chr(self.dev_num) + chr(0x21) + chr(variable_id)
+        cmd = CMD.PROTOCOL + chr(self.dev_num) + chr(0x21) + chr(variable_id)
         Daisy.ser.write(cmd)
 
         low_byte = Daisy.ser.read()
@@ -238,11 +238,11 @@ class Daisy(object):
         the motor driver. Returned in degrees Celsius"""
         return self._get_variable(VAR_ID.TEMPERATURE)
 
-    def get_analog1(self):
+    def get_an1(self):
         """Read analog voltage level. 65535 means Error Max/Min or disconnect"""
         return self._get_variable(VAR_ID.AN1_RAW)
 
-    def get_analog2(self):
+    def get_an2(self):
         """Read analog voltage level. 65535 means Error Max/Min or disconnect"""
         return self._get_variable(VAR_ID.AN2_RAW)
 

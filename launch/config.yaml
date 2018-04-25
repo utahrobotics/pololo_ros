@@ -1,7 +1,8 @@
 # dev numbers. these are labeled on devices
-dump_spin_left: 0
-dump_spin_right: 1
-extend_linear_left: 2
-extend_linear_right: 3
-insert_linear: 4
+dev_num:
+  insert_la: 0
+  extend_la_left: 1
+  extend_la_right: 2
+  dump_spin_left: 3
+  dump_spin_right: 4
 
