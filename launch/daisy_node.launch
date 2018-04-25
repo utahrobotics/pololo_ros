@@ -7,11 +7,7 @@
         <!-- Port file of usb serial device -->
         <param name="port" type="string" value="$(arg port)"/>
         <!-- Device number configuration for daisy chaining  -->
-        <rosparam>
-            # These are the device numbers of the board for the linear actuators (this is yaml)
-              linear_actuators:
-                  dumper: 4
-        </rosparam>
+		<rosparam command="load" file="$(find pololu_ros)/launch/config.yaml" />
     </node>
 
 </launch>

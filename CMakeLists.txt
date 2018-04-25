@@ -7,9 +7,6 @@ find_package(catkin REQUIRED COMPONENTS
 	message_generation
 )
 
-## See http://ros.org/doc/api/catkin/html/user_guide/setup_dot_py.html
-catkin_python_setup()
-
 add_message_files(
 	FILES
 	LimitSwitch.msg

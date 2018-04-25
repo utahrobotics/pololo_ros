@@ -1,6 +1,6 @@
 #!/usr/bin/python
 from __future__ import division
-from pololu_driver import Daisy # serial controller for controller in Daisy chain
+from pololu_driver import clip, Daisy # serial controller for controller in Daisy chain
 
 import rospy
 import threading
@@ -13,7 +13,6 @@ from pololu_ros.msg import LimitSwitch
 class Node(object):
     def __init__(self):
         """Init ros node"""
-        self.lock = threading.Lock()
         rospy.init_node("pololu_node") 
         rospy.on_shutdown(self.shutdown)
         rospy.loginfo("Connecting to pololu daisy chain")
@@ -27,17 +26,27 @@ class Node(object):
         rospy.loginfo("Daisy node timeout = %s", self.timeout)
 
         # get device numbers from ros parameter server (see launch~_node.launch)
-        self.dumper_devnum = rospy.get_param("~linear_actuators/dumper")
+        self.dump_spin_left_devnum = rospy.get_param("~dump_spin_left")
+        self.dump_spin_right_devnum = rospy.get_param("~dump_spin_right")
+        self.extend_linear_left_devnum = rospy.get_param("~extend_linear_left")
+        self.extend_linear_right_devnum = rospy.get_param("~extend_linear_right")
+        self.insert_linear_devnum = rospy.get_param("~insert_linear")
 
-        # initalize Daisy chain serial controllers
-        self.dumper = Daisy(self.dumper_devnum, port=self.port) # first one initialized must set the port
-        self.devices = [dumper]
-        self.dev_names = ["dumper"]
+        # get device numbers from ros parameter server (see launch~_node.launch)
+        self.dump_spin_left = Daisy(self.dump_spin_left_devnum, port=self.port) # 1st one sets port
+        self.dump_spin_right = Daisy(self.dump_spin_right_devnum)
+        self.extend_linear_left = Daisy(self.extend_linear_left_devnum)
+        self.extend_linear_right = Daisy(self.extend_linear_right_devnum)
+        self.insert_linear = Daisy(self.insert_linear_devnum)
+
+        # TODO (p1): add some checks to make sure that devices boot up 
 
         rospy.sleep(0.1) # wait for params to get set
 
         # Subscribers
-        self.dumper_sub = rospy.Subscriber("/digger/vel", Float32, self.arm_vel_callback, queue_size=1)
+        self.insert_sub = rospy.Subscriber("insert_linear", Float32, self.insert_callback, queue_size=1)
+        self.extend_sub = rospy.Subscriber("extend_linear", Float32, self.extend_callback, queue_size=1)
+        self.dump_sub = rospy.Subscriber("dump_spin", Float32, self.dump_callback, queue_size=1)
         #self.diagnostic_pub = rospy.Publisher("/diagnostics", DiagnosticArray, queue_size=10)
         #rospy.Timer(rospy.Duration(0.1), self.publish_limits)
 
@@ -45,8 +54,7 @@ class Node(object):
 
     def _stop_all_motors(self):
         """Send stop command to all daisy chained motors"""
-        with self.lock:
-          self.dumper.stop()
+        self.dump_spin_left.stop()
 
     def run(self):
         """Run the main ros loop"""
@@ -65,132 +73,43 @@ class Node(object):
                 self._has_showed_message = False
             r_time.sleep()
 
-    def publish_diagnostics(self, event):
-        """Generate a diagnostic message of device statuses, voltage levels,
-        and limit switch triggers. Not critical code.
-        """
-        with self.lock:
-            diagnostic_arr = DiagnosticArray()  # create object to hold data to publish
-            # Generate a ROS message header for time stamping
-            header = Header()
-            header.stamp = rospy.Time.now()
-            diagnostic_arr.header = header
 
-            # For all the devices, set the status based on Pololu serial variables
-            # and append these statues to the diagnostic_arr status field
-            for i in range(len(self.devices)):
-                dev = self.devices[i]
-                name = self.dev_names[i]
-                status = DiagnosticStatus()
-                status.name = name
-                status.hardware_id = str(self.devices[i].dev_num)
+    def insert_callback(self, cmd):
+        rospy.logdebug("Velocity cmd to insert linear actuator: %.4f", cmd.data)
 
-                errstat = dev.get_error_status()
-                sererr = dev.get_serial_errors()
-                if errstat == "OK" and sererr == "OK":
-                    status.level = 0
-                    status.message = errstat + "\n" + sererr
-                else:
-                    status.level = 1
-                    status.message = errstat + "\n" + sererr
+        motor_cmd = clip(int(cmd.data * 3200), 0, 3200)
+        self.last_insert_msg_time = rospy.get_rostime()
 
-                # Get voltage level and set error status if it is too high or low
-                voltage_level = dev.get_input_voltage()
-                if voltage_level > 30 or voltage_level < 20:
-                    status.level = 2
-                    status.message = "Voltage out of range: %.2f" % (voltage_level)
+        rospy.logdebug("Insert linear actuator serial cmd = %d", motor_cmd)
 
-                status.values.append(KeyValue("Voltage", "%.2f" % voltage_level))
-                status.values.append(KeyValue("Speed", str(dev.get_speed())))
+        self.insert.drive(motor_command)
 
-                diagnostic_arr.status.append(status)
+        ### drive both linear actuators with the same cmd
+        ##self.sled_left.drive(-motor_command)
+        ##self.sled_right.drive(motor_command)
 
-            self.diagnostic_pub.publish(diagnostic_arr)
+    def extend_sub(self, cmd):
+        rospy.logdebug("Velocity cmd to extend linear actuators: %.4f", cmd.data)
+        pass
 
-    def publish_limits(self, event):
-        """Publish the limit switch status - this is critical code"""
-        with self.lock:
-          header = Header()
-          header.stamp = rospy.Time.now()
-          lim_switch1 = False
-          lim_switch2 = False;
-          for i in range(len(self.devices)):
-              dev = self.devices[i]
-              name = self.dev_names[i]
-              if "sled" in name:
-                  lim_switch1, lim_switch2 = dev.get_limit_statuses()
-              if lim_switch1 == True or lim_switch2 == True:
-                  break
-
-          limit_switch = LimitSwitch()
-          limit_switch.front = lim_switch1
-          limit_switch.rear = lim_switch2
-          self.limit_pub.publish(limit_switch)
-
-    def arm_vel_callback(self, command):
-        """Command the arm linear actuators based on the incoming command"""
-        with self.lock:
-          self.last_set_speed_time = rospy.get_rostime()
-
-          rospy.logdebug("Velocity command to arm linear actuators: %.4f", command.data)
-
-          motor_command = max(-1.0, min(command.data, 1.0)) # put bounds on the incoming command
-          motor_command = int(command.data * 3200) # scale to that expected by drivers
-
-          rospy.logdebug("Arm linear actuator serial command = %d", motor_command)
-
-          # drive both linear actuators with the same command
-          self.arm_left.drive(motor_command)
-          self.arm_right.drive(motor_command)
-
-
-    def bucket_vel_callback(self, command):
-        with self.lock:
-          """Command the bucket slinear actuators based on the incoming command"""
-          self.last_set_speed_time = rospy.get_rostime()
-
-          rospy.logdebug("Velocity command to bucket linear actuators: %.4f", command.data)
-
-          motor_command = max(-1.0, min(command.data, 1.0)) # put bounds on the incoming command
-          motor_command = int(command.data * 3200) # scale to that expected by drivers
-
-          rospy.logdebug("Bucket linear actuator serial command = %d", motor_command)
-
-          # drive both linear actuators with the same command
-          self.bucket_left.drive(motor_command)
-          self.bucket_right.drive(motor_command)
-
-
-    def sled_vel_callback(self, command):
-        with self.lock:
-          """Command the rack and sled based on the incoming command"""
-          self.last_set_speed_time = rospy.get_rostime()
-
-          rospy.logdebug("Velocity command to sled motors: %.4f", command.data)
-
-          motor_command = max(-1.0, min(command.data, 1.0)) # put bounds on the incoming command
-          motor_command = int(command.data * 3200) # scale to that expected by drivers
-
-          rospy.logdebug("sled motor serial command = %d", motor_command)
-
-          # drive both linear actuators with the same command
-          self.sled_left.drive(-motor_command)
-          self.sled_right.drive(motor_command)
-
+    def dump_sub(self, cmd):
+        rospy.logdebug("Velocity cmd to dump spin motors: %.4f", cmd.data)
+        pass
 
 
     def shutdown(self):
         """Handle shutting down the node"""
         rospy.loginfo("Shutting down daisy node")
 
-        if hasattr(self, "sub"):
-            # so these don't get called while the node is shutting down
-            self.arm_sub.unregister()
-            self.bucket_sub.unregister()
-            self.sled_sub.unregister()
-
+        # so these don't get called while the node is shutting down
+        # (need to add checks in case it immediately shuts down. (i think))
+        if hasattr(self, "insert_sub"):
+            self.insert_sub.unregister()
+        if hasattr(self, "extend_sub"):
+            self.extend_sub.unregister()
+        if hasattr(self, "dump_sub"):
+            self.dump_sub.unregister()
         self._stop_all_motors()
-        # quit()
 
 if __name__ == "__main__":
     try:
@@ -199,3 +118,47 @@ if __name__ == "__main__":
     except rospy.ROSInterruptException:
         pass
     rospy.loginfo("Exiting daisy node")
+
+
+##    def publish_diagnostics(self, event):
+##        """Generate a diagnostic message of device statuses, voltage levels,
+##        and limit switch triggers. Not critical code.
+##        """
+##        with self.lock:
+##            diagnostic_arr = DiagnosticArray()  # create object to hold data to publish
+##            # Generate a ROS message header for time stamping
+##            header = Header()
+##            header.stamp = rospy.Time.now()
+##            diagnostic_arr.header = header
+##
+##            # For all the devices, set the status based on Pololu serial variables
+##            # and append these statues to the diagnostic_arr status field
+##            for i in range(len(self.devices)):
+##                dev = self.devices[i]
+##                name = self.dev_names[i]
+##                status = DiagnosticStatus()
+##                status.name = name
+##                status.hardware_id = str(self.devices[i].dev_num)
+##
+##                errstat = dev.get_error_status()
+##                sererr = dev.get_serial_errors()
+##                if errstat == "OK" and sererr == "OK":
+##                    status.level = 0
+##                    status.message = errstat + "\n" + sererr
+##                else:
+##                    status.level = 1
+##                    status.message = errstat + "\n" + sererr
+##
+##                # Get voltage level and set error status if it is too high or low
+##                voltage_level = dev.get_input_voltage()
+##                if voltage_level > 30 or voltage_level < 20:
+##                    status.level = 2
+##                    status.message = "Voltage out of range: %.2f" % (voltage_level)
+##
+##                status.values.append(KeyValue("Voltage", "%.2f" % voltage_level))
+##                status.values.append(KeyValue("Speed", str(dev.get_speed())))
+##
+##                diagnostic_arr.status.append(status)
+##
+##            self.diagnostic_pub.publish(diagnostic_arr)
+
