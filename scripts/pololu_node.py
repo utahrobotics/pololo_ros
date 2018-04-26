@@ -4,7 +4,7 @@ from pololu_driver import clip, Daisy # serial controller for controller in Dais
 
 import rospy
 import threading
-from std_msgs.msg import Float32, Header, Bool
+from std_msgs.msg import Bool, Float32
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
 # TODO: if necessary, add more try and excepts for error catching
@@ -27,6 +27,13 @@ class FreshVal(object):
         self.last_update_time = rospy.Time.now()
 
     @property
+    def is_fresh(self):
+        fresh = True
+        fresh = fresh and self._val is not None
+        fresh = fresh and (rospy.Time.now() - self.last_update_time).to_sec() < self.timeout
+        return fresh
+
+    @property
     def val(self):
         # if stale, return timeout_val
         if (rospy.Time.now() - self.last_update_time).to_sec() > self.timeout:
@@ -47,33 +54,45 @@ class Node(object):
         self.last_set_speed_time = rospy.get_rostime()
         self.port = rospy.get_param("~port")
         self.timeout = rospy.get_param("~timeout")  # time between hearing commands before we shut off the motors
+        self.amp_threshold = rospy.get_param("~amp_threshold")
+        self.extend_state = rospy.get_param("~extend_state")
+
+        # Commands and actuator state variables
         self.last_insert_msg = FreshVal(stale_val=0, timeout=self.timeout, name="insert")
         self.last_extend_msg = FreshVal(stale_val=0, timeout=self.timeout, name="extend")
         self.last_spin_msg =   FreshVal(stale_val=0, timeout=self.timeout, name="spin")
+        self.ila_state =       FreshVal(stale_val=0, timeout=self.timeout, name="insert_state")
+        self.ila_current =     FreshVal(stale_val=0, timeout=self.timeout, name="insert_curent")
+        self.ela_left_state =  FreshVal(stale_val=0, timeout=self.timeout, name="extend_left_state")
+        self.ela_right_state = FreshVal(stale_val=0, timeout=self.timeout, name="extend_right_state")
 
         rospy.loginfo("[POLOLU]: chain port: %s", self.port)
         rospy.loginfo("[POLOLU]: timeout = %s", self.timeout)
 
         # get device numbers (see daisy_node.launch) and open a serial connection
         # (la = linear_actuator)
-        self.insert_la =       Daisy(rospy.get_param("~dev_num/insert_la"), port=self.port) # 1st one sets port
-        self.extend_la_left =  Daisy(rospy.get_param("~dev_num/extend_la_left"))
-        self.extend_la_right = Daisy(rospy.get_param("~dev_num/extend_la_right"))
+        # (ila = insert_linear_actuator)
+        # (ela = extend_linear_actuator)
+        self.ila =       Daisy(rospy.get_param("~dev_num/insert_la"), port=self.port) # 1st one sets port
+        self.ela_left =  Daisy(rospy.get_param("~dev_num/extend_la_left"))
+        self.ela_right = Daisy(rospy.get_param("~dev_num/extend_la_right"))
         self.dumper_spin_left =  Daisy(rospy.get_param("~dev_num/dumper_spin_left"))
         self.dumper_spin_right = Daisy(rospy.get_param("~dev_num/dumper_spin_right"))
 
-        self.devices = [self.insert_la, self.extend_la_left, self.extend_la_left, self.dumper_spin_left, self.dumper_spin_right]
+        self.devices = [self.ila, self.ela_left, self.ela_left, self.dumper_spin_left, self.dumper_spin_right]
 
-        # TODO (p1): add some checks to make sure that devices boot up 
+        # TODO (p1): add some checks to make sure that devices boot up, once we get it wired up
 
         rospy.sleep(0.1) # wait for params to get set
 
         # Subscribers
-        self.insert_sub = rospy.Subscriber("/insert_la", Float32, self.insert_callback, queue_size=1)
-        self.extend_sub = rospy.Subscriber("/extend_la", Float32, self.extend_callback, queue_size=1)
-        self.dumper_sub = rospy.Subscriber("/dumper_spin", Float32, self.dumper_callback, queue_size=1)
+        self.insert_sub = rospy.Subscriber("/insert_la/cmd", Float32, self.insert_callback, queue_size=1)
+        self.extend_sub = rospy.Subscriber("/extend_la/cmd", Float32, self.extend_callback, queue_size=1)
+        self.dumper_sub = rospy.Subscriber("/dumper_spin/cmd", Float32, self.dumper_callback, queue_size=1)
+        self.insert_state_pub = rospy.Publisher("/insert_la/state", Float32, queue_size=1)
+        self.insert_current_pub = rospy.Publisher("/insert_la/amps", Float32, queue_size=1)
+        self.extend_state_pub = rospy.Publisher("/extend_la/state", Float32, queue_size=1)
         self.digger_extended_pub = rospy.Publisher("/digger_extended", Bool, queue_size=1)
-        #self.diagnostic_pub = rospy.Publisher("/diagnostics", DiagnosticArray, queue_size=10)
         #rospy.Timer(rospy.Duration(0.1), self.publish_limits)
         self._have_shown_message = False  # flag to indicate we have showed the motor shutdown message
 
@@ -83,14 +102,18 @@ class Node(object):
             dev.stop()
 
     def _send_insert_cmd(self):
-        # TODO (p1): add a current check here to shut down motor if it gets too high 
         last_cmd = self.last_insert_msg.val
-        self.insert_la.drive(last_cmd)
+        # TODO (p1): add a current check here to shut down motor if it gets too high 
+        # TODO: need to do some smoothing here, because there can be temporary spikes, we want to check for continuous
+        ## stop motor if it exceeds current rating
+        #if self.ila_current.val > self.amp_threshold:
+        #    last_cmd = 0
+        self.ila.drive(last_cmd)
 
     def _send_extend_cmd(self):
         last_cmd = self.last_extend_msg.val # make sure they get the same command
-        self.extend_la_left.drive(last_cmd)
-        self.extend_la_right.drive(last_cmd)
+        self.ela_left.drive(last_cmd)
+        self.ela_right.drive(last_cmd)
 
     def _send_spin_cmd(self):
         """Send spin command to the dumping motors"""
@@ -99,31 +122,55 @@ class Node(object):
         self.dumper_spin_right.drive(-last_cmd)
 
     def _read_la_states(self):
-        insert_la_state = self.insert_la.get_an1()
-        #insert_la_current = self.insert_la.get_an2()
-        #extend_la_left_state = self.extend_la_left.get_an1()
-        #extend_la_right_state = self.extend_la_right.get_an1()
-        # TODO: test
+        # read from serial
+        ila_an1 = self.ila.get_an1()
+        ila_an2 = self.ila.get_an2()
+        ela_left_an1 = self.ela_left.get_an1()
+        ela_right_an1 = self.ela_right.get_an1()
+        # update variables
+        self.ila_state.update(ila_an1)
+        self.ila_current.update(ila_an2)
+        self.ela_left_state.update(ela_left_an1)
+        self.ela_right_state.update(ela_right_an1)
+        # debug msg
+        rospy.logdebug("[POLOLU]: insert linear actuator state = {}".format(self.ila_state.val))
+        rospy.logdebug("[POLOLU]: insert linear actuator current = {}".format(self.ila_current.val))
+        rospy.logdebug("[POLOLU]: extend linear actuator left state = {}".format(self.ila_state.val))
+        rospy.logdebug("[POLOLU]: extend linear actuator right state = {}".format(self.ila_current.val))
 
-        # TODO (p1): add logic 
-        rospy.loginfo("insert an1 = {}".format(insert_la_state))
-        #rospy.loginfo("insert an2 = %d", insert_la_current)
-        #rospy.loginfo("extend left an1 = %d", extend_la_left_state)
-        #rospy.loginfo("extend right an2 = %d", extend_la_right_state)
-    
+    def _publish_la_states(self):
+        # TODO (p2): convert these to meters once they are attached to the robot 
+        # publish insert linear actuator state
+        if self.ila_state.is_fresh:
+            self.insert_state_pub.publish(self.ila_state.val)
+        if self.ila_current.is_fresh:
+            self.insert_current_pub.publish(self.ila_current.val)
+        # publish extend linear actuator state
+        if self.ela_right_state.is_fresh and self.ela_left_state.is_fresh:
+            val = 0.5*(self.ela_left_state.val + self.ela_right_state.val)
+            self.extend_state_pub.publish(val)
+
+            # TODO (p1) : uncomment and test this when stuff is wired
+            ## if we are extended (this is received by roboclaw_node to make sure we never dig when we are not extended)
+            #if val > self.extended_state:
+            #    self.digger_extended_pub.publish(True)
+            #else:
+            #    self.digger_extended_pub.publish(False)
+
     def run(self):
         """Run the main ros loop. All Serial communication should happen in this thread"""
         rospy.loginfo("[POLOLU]: Starting node loop")
         rate = rospy.Rate(30) 
 
         while not rospy.is_shutdown():
-
-
+            # Write
             self._send_insert_cmd()
             self._send_extend_cmd()
             self._send_spin_cmd()
+            # Read
             self._read_la_states()
-
+            # ROS publish
+            self._publish_la_states()
 
             rate.sleep()
 
