@@ -1,6 +1,6 @@
 #!/usr/bin/python
 from __future__ import division
-from pololu_driver import clip, Daisy # serial controller for controller in Daisy chain
+from pololu_driver import clip, Pololu # serial controller for Pololu
 
 import rospy
 import threading
@@ -52,7 +52,6 @@ class Node(object):
         rospy.on_shutdown(self.shutdown)
         rospy.loginfo("[POLOLU]: Connecting to pololu daisy chain")
         self.last_set_speed_time = rospy.get_rostime()
-        self.port = rospy.get_param("~port")
         self.timeout = rospy.get_param("~timeout")  # time between hearing commands before we shut off the motors
         self.amp_threshold = rospy.get_param("~amp_threshold")
         self.extend_state = rospy.get_param("~extend_state")
@@ -66,18 +65,18 @@ class Node(object):
         self.ela_left_state =  FreshVal(stale_val=0, timeout=self.timeout, name="extend_left_state")
         self.ela_right_state = FreshVal(stale_val=0, timeout=self.timeout, name="extend_right_state")
 
-        rospy.loginfo("[POLOLU]: chain port: %s", self.port)
         rospy.loginfo("[POLOLU]: timeout = %s", self.timeout)
 
         # get device numbers (see daisy_node.launch) and open a serial connection
         # (la = linear_actuator)
         # (ila = insert_linear_actuator)
         # (ela = extend_linear_actuator)
-        self.ila =       Daisy(rospy.get_param("~dev_num/insert_la"), port=self.port) # 1st one sets port
-        self.ela_left =  Daisy(rospy.get_param("~dev_num/extend_la_left"))
-        self.ela_right = Daisy(rospy.get_param("~dev_num/extend_la_right"))
-        self.dumper_spin_left =  Daisy(rospy.get_param("~dev_num/dumper_spin_left"))
-        self.dumper_spin_right = Daisy(rospy.get_param("~dev_num/dumper_spin_right"))
+        self.ila =       Pololu(rospy.get_param("~dev_num/insert_la"))
+        self.ela_left =  Pololu(rospy.get_param("~dev_num/extend_la_left"))
+        self.ela_right = Pololu(rospy.get_param("~dev_num/extend_la_right"))
+        self.dumper_spin_left =  Pololu(rospy.get_param("~dev_num/dumper_spin_left"))
+
+        self.dumper_spin_right = Pololu(rospy.get_param("~dev_num/dumper_spin_right"))
 
         self.devices = [self.ila, self.ela_left, self.ela_left, self.dumper_spin_left, self.dumper_spin_right]
 
@@ -103,6 +102,7 @@ class Node(object):
 
     def _send_insert_cmd(self):
         last_cmd = self.last_insert_msg.val
+        #rospy.loginfo("{} {}".format(last_cmd, self.dumper_spin_left.dev_num))
         # TODO (p1): add a current check here to shut down motor if it gets too high 
         # TODO: need to do some smoothing here, because there can be temporary spikes, we want to check for continuous
         ## stop motor if it exceeds current rating
@@ -117,7 +117,7 @@ class Node(object):
 
     def _send_spin_cmd(self):
         """Send spin command to the dumping motors"""
-        last_cmd = self.last_spin_msg.val # make sure they get the same command
+        last_cmd = int(0.5*self.last_spin_msg.val) # make sure they get the same command
         self.dumper_spin_left.drive(last_cmd)
         self.dumper_spin_right.drive(-last_cmd)
 
@@ -133,10 +133,10 @@ class Node(object):
         self.ela_left_state.update(ela_left_an1)
         self.ela_right_state.update(ela_right_an1)
         # debug msg
-        rospy.logdebug("[POLOLU]: insert linear actuator state = {}".format(self.ila_state.val))
-        rospy.logdebug("[POLOLU]: insert linear actuator current = {}".format(self.ila_current.val))
-        rospy.logdebug("[POLOLU]: extend linear actuator left state = {}".format(self.ila_state.val))
-        rospy.logdebug("[POLOLU]: extend linear actuator right state = {}".format(self.ila_current.val))
+        #rospy.logdebug("[POLOLU]: insert linear actuator state = {}".format(self.ila_state.val))
+        #rospy.logdebug("[POLOLU]: insert linear actuator current = {}".format(self.ila_current.val))
+        #rospy.logdebug("[POLOLU]: extend linear actuator left state = {}".format(self.ila_state.val))
+        #rospy.logdebug("[POLOLU]: extend linear actuator right state = {}".format(self.ila_current.val))
 
     def _publish_la_states(self):
         # TODO (p2): convert these to meters once they are attached to the robot 
@@ -168,9 +168,9 @@ class Node(object):
             self._send_extend_cmd()
             self._send_spin_cmd()
             # Read
-            self._read_la_states()
+            #self._read_la_states()
             # ROS publish
-            self._publish_la_states()
+            #self._publish_la_states()
 
             rate.sleep()
 
@@ -196,7 +196,7 @@ class Node(object):
         rospy.logdebug("[POLOLU]: Velocity cmd to dumper spin motors: %.4f", msg.data)
         cmd = self._scale_and_clip(msg)
         self.last_spin_msg.update(cmd)
-        rospy.logdebug("[POLOLU]: Dump linear actuator serial cmd = %d", cmd)
+        rospy.logdebug("[POLOLU]: Dump spin serial cmd = %d", cmd)
 
     def shutdown(self):
         """Handle shutting down the node"""
