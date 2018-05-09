@@ -75,7 +75,6 @@ class Node(object):
         self.ila_left =  Pololu(rospy.get_param("~dev_num/insert_la_left"), flip=True)
         self.ila_right = Pololu(rospy.get_param("~dev_num/insert_la_right"), flip=True)
         self.dumper_spin_left =  Pololu(rospy.get_param("~dev_num/dumper_spin_left"))
-
         self.dumper_spin_right = Pololu(rospy.get_param("~dev_num/dumper_spin_right"))
 
         self.devices = [self.ela, self.ila_left, self.ila_right, self.dumper_spin_left, self.dumper_spin_right]
@@ -169,9 +168,9 @@ class Node(object):
             self._send_insert_cmd()
             self._send_spin_cmd()
             # Read
-            self._read_la_states()
+            #self._read_la_states()
             # ROS publish
-            self._publish_la_states()
+            #self._publish_la_states()
 
             rate.sleep()
 

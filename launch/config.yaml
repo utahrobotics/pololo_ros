@@ -1,8 +1,15 @@
 # dev numbers. these are labeled on devices
 dev_num:
+<<<<<<< HEAD
   extend_la: 5
   insert_la_left: 0
   insert_la_right: 1
   dumper_spin_left: 6
+=======
+  insert_la: 5
+  extend_la_left: 0
+  extend_la_right: 1
+  dumper_spin_left: 4
+>>>>>>> 2f0b50dd97a1df18f4b7473696dc3170c10e50d1
   dumper_spin_right: 3
 
