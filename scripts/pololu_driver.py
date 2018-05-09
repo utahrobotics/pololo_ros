@@ -2,6 +2,7 @@
 from __future__ import division
 import serial
 import struct
+import time
 
 
 """Pololu driver module for motor controllers using pyserial
@@ -13,17 +14,14 @@ Serial reference: https://www.pololu.com/docs/0J44/6.2.1
 Get Variable reference: https://www.pololu.com/docs/0J44/6.4
 
 Example:
-Here is an example of usage. The first Daisy object sets the port and
-all the of the rest use the same port.
-    ::
-        motor0 = Daisy(0, port="/dev/ttyUSB0") # only first one has to be set
-        motor1 = Daisy(1) # all following will use the first port
-        motor2 = Daisy(2)
+Here is an example of usage. 
+::
+        motor0 = Pololu(0)
+        motor1 = Pololu(1)
+        motor2 = Pololu(2)
 
         motor1.forward(1600) # drive forward the motor with device number 1
 
-        # All motors are using port "/dev/ttyUSB0" to send commands
-        # Each device is addressed by their device number
 """
 def clip(val, minval, maxval):
     """clip val between minval,maxval"""
@@ -36,6 +34,7 @@ class CMD:
     BACKWARD = chr(0x06)  # Drive motor reverse command
     START = chr(0x03)  # Exit Safe-Start mode so the motor can run
     STOP = chr(0x60)   # Stops the motor and enters Safe-Start mode
+    MOTOR_LIMIT = chr(0x22) # Set motor limits
 
 class VAR_ID:
     ERROR_STATUS = 0
@@ -67,76 +66,48 @@ class VAR_ID:
     BRAKE_DURATION_BACKWARD = 39
 
 
-class Daisy(object):
+class Pololu(object):
     """Represents a single Pololu Simple Motor Controller in a daisy chain
-
-    This class offers an interface to daisy chain several Pololu Simple
-    Motor Controllers. The daisy chained modules all share the same
-    serial connection.  To target specific devices, every command
-    is sent with the device number of the device.  You must configure the
-    devices to have different numbers. This must be done using the Simple
-    Motor Controller setup softare (https://www.pololu.com/docs/0J44/3).
-
-    Initialize every separate board you want to talk to with its
-    set device number.
-
 
     Attributes:
         dev_num (int): Device number of Pololu board to be commanded
         flip (bool): Polarity of motor. False if normal configuration
         port (str): Serial port of all devices chained
     """
-    # Variables shared between all Daisy instances
-    count = 0  # keep track of number of Daisys open
-    ser = None  # initialize static variable ser to None
-    first_flip = False # first
-
     def __init__(self, dev_num, flip=False, port=None, timeout=0.1):
         """Set motor id and open serial connection if not already open"""
         if dev_num < 0 or dev_num > 127:
             raise Exception("Invalid motor id, must set to id of motor (0-127) for daisy chaining")
 
-        Daisy.count += 1  # increment count of controllers
         self.dev_num = dev_num  # set device number to use in other commands
+        self.port = "/dev/pololu{}".format(dev_num)
         #self.crc_enabled = crc_enabled # NOT FUNCTIONAL
+        self.ser = serial.Serial(port=self.port, baudrate=115200, timeout=timeout)
+        self.ser.write(CMD.BAUD_SYNC)  # sync old devices by writing 0x80
 
-        # if serial connection has not been made yet
-        if Daisy.ser is None or not Daisy.ser.isOpen():
-            Daisy.first_flip = flip
-            Daisy.ser = serial.Serial(port, baudrate=115200, timeout=timeout)
-            Daisy.ser.write(CMD.BAUD_SYNC)  # sync old devices by writing 0x80
-        elif port is not None:
-            raise Exception("Only the first instantiated Daisy object can set the port")
-
-        if flip != Daisy.first_flip:
-            print("WARN: your motors have different flip (polarity) values")
         self.flip = flip
         self._exit_safe_start()  # make it so pololu reacts to commands
 
     def __del__(self):
         """Decrement count, stop motor, and if it's the last connection, close the port"""
-        Daisy.count -= 1  # decrement count of controllers
         self._stop_motor()  # safely stop current motor
-        # if this is the last controller open
-        if Daisy.count <= 0:
-            if Daisy.ser is not None:
-                Daisy.ser.close()
-                print("Serial connection closed")
+        self.ser.close()
 
     # INTERNAL METHODS
     def _send_command(self, command, databyte3, databyte4):
         """Sends a two-byte command using the Pololu protocol."""
         cmd = CMD.PROTOCOL + chr(self.dev_num) + command + chr(databyte3) + chr(databyte4)
-        #if self.crc_enabled:
-        #    cmd = self.crc7(cmd) # Calculate and append Cyclic Redundancy Check byte
-        Daisy.ser.write(cmd)
+        self.ser.write(cmd)
 
     def _send_command_single(self, command):
         """Sends a one-byte command using the Pololu protocol."""
         cmd = CMD.PROTOCOL + chr(self.dev_num) + command
-        #if self.crc_enabled:
-        #    cmd = self.crc7(cmd) # Calculate and append Cyclic Redundancy Check byte
-        Daisy.ser.write(cmd)
+        self.ser.write(cmd)
+
+    def _send_command_three(self, command, databyte3, databyte4, databyte5):
+        """Sends a three-byte command using the Pololu protocol"""
+        cmd = CMD.PROTOCOL + chr(self.dev_num) + command + chr(databyte3) + chr(databyte4) + chr(databyte5)
+        self.ser.write(cmd)
 
     def _exit_safe_start(self):
         """Exit safe start so you can freely send commands to Pololu.
@@ -150,15 +121,15 @@ class Daisy(object):
     def _get_variable(self, variable_id):
         """Get variable from pololu device"""
         cmd = CMD.PROTOCOL + chr(self.dev_num) + chr(0x21) + chr(variable_id)
-        Daisy.ser.write(cmd)
+        self.ser.write(cmd)
 
-        low_byte = Daisy.ser.read()
+        low_byte = self.ser.read()
         # if the board didn't write anything to serial (due to timeout probably), bail
         if (low_byte == ''): 
-            Daisy.ser.flushInput()
+            self.ser.flushInput()
             return None
         low_byte = ord(low_byte) # variable low byte
-        high_byte = 256 * ord(Daisy.ser.read())
+        high_byte = 256 * ord(self.ser.read())
         return high_byte + low_byte
 
 
@@ -167,7 +138,7 @@ class Daisy(object):
     def get_error_status(self):
         """Get the error status of the device. Return string `OK` if all good,
         else return the string of the exact error."""
-        val = self._get_variable("error_stat")
+        val = self._get_variable(VAR_ID.ERROR_STATUS)
         if val == 0:
             return "OK"
         else:
@@ -188,7 +159,7 @@ class Daisy(object):
     def get_serial_errors(self):
         """Check if there were any serial errors, if none return "OK, else
         give return a listing the error that occured, such as a FRAME error"""
-        val = self._get_variable("ser_error")
+        val = self._get_variable(VAR_ID.SERIAL_ERROR)
         if val == 0:
             return "OK" # No errors
         else:
@@ -246,11 +217,35 @@ class Daisy(object):
         """Read analog voltage level. 65535 means Error Max/Min or disconnect"""
         return self._get_variable(VAR_ID.AN2_RAW)
 
+    def get_baud(self):
+        """Read the baudrate of the pololu"""
+        return self._get_variable(VAR_ID.BAUDRATE)
+
+    def set_motor_limits(self, max_accel, max_deccel):
+        """Set limits on motor acceleration"""
+        if not isinstance(max_accel, int) or not isinstance(max_deccel, int):
+            raise ValueError("Must use int set limits")
+
+        max_accel = clip(max_accel, 0, 3200)
+        max_deccel = clip(max_deccel, 0, 3200)
+
+        accel_b1 = max_accel % 128
+        accel_b2 = max_accel // 128
+
+        deccel_b1 = max_deccel % 128
+        deccel_b2 = max_deccel // 128
+
+        # max speed = self._send_command_three(CMD.MOTOR_LIMIT, 0, 0, 0)
+        self._send_command_three(CMD.MOTOR_LIMIT, 1, accel_b1, accel_b2)
+        self._send_command_three(CMD.MOTOR_LIMIT, 2, deccel_b1, deccel_b2)
+
     # USER CONTROL
     def forward(self, speed):
         """Drive motor forward at specified speed (0 to 3200)"""
-        speed = clip(speed, 0, 3200)
+        if not isinstance(speed, int):
+            raise ValueError("Must use int to drive motor")
 
+        speed = clip(speed, 0, 3200)
         self._exit_safe_start()
         # This is how the documentation recommends doing it.
         # The 1st byte will be from 0 to 31
@@ -264,6 +259,9 @@ class Daisy(object):
 
     def backward(self, speed):
         """Drive motor backward (reverse) at specified speed (0 to 3200)"""
+        if not isinstance(speed, int):
+            raise ValueError("Must use int to drive motor")
+
         speed = clip(speed, 0, 3200)
         self._exit_safe_start()
         cmd1 = speed % 32
